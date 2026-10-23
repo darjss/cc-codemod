@@ -15388,13 +15388,13 @@ Parser.tokenizer = function tokenizer(input, options) {
 };
 Object.defineProperties(Parser.prototype, prototypeAccessors);
 var pp$9 = Parser.prototype;
-var literal$1 = /^(?:'((?:\\[^]|[^'\\])*?)'|"((?:\\[^]|[^"\\])*?)")/;
+var literal$2 = /^(?:'((?:\\[^]|[^'\\])*?)'|"((?:\\[^]|[^"\\])*?)")/;
 pp$9.strictDirective = function(start) {
 	if (this.options.ecmaVersion < 5) return false;
 	for (;;) {
 		skipWhiteSpace.lastIndex = start;
 		start += skipWhiteSpace.exec(this.input)[0].length;
-		var match = literal$1.exec(this.input.slice(start));
+		var match = literal$2.exec(this.input.slice(start));
 		if (!match) return false;
 		if ((match[1] || match[2]) === "use strict") {
 			skipWhiteSpace.lastIndex = start + match[0].length;
@@ -24216,7 +24216,7 @@ const calleeDescription = (node) => {
 	const object = calleeDescription(node.object);
 	return object === void 0 ? void 0 : `${object}.${key}`;
 };
-const literal = (node) => {
+const literal$1 = (node) => {
 	if (typeof node.value === "bigint") throw typeError("BigInt literals are not supported.", node);
 	if (node.value instanceof RegExp) throw unsupportedSyntax("RegExpLiteral", node);
 	return node.value;
@@ -24984,7 +24984,7 @@ var Frame = class Frame {
 			case "Literal": {
 				const regex = node.regex;
 				if (regex) return sync(() => constructRegExp(this.ctx.builtins, [regex.pattern, regex.flags]));
-				return succeed$1(literal(node));
+				return succeed$1(literal$1(node));
 			}
 			case "Identifier": return sync(() => this.scopes.get(node.name, node));
 			case "ThisExpression": return sync(() => this.scopes.get("this", node));
@@ -25554,7 +25554,7 @@ var Frame = class Frame {
 				let key;
 				if (property.computed) key = yield* self.toPropertyKey(yield* self.evaluateExpression(keyNode), keyNode);
 				else if (keyNode.type === "Identifier") key = keyNode.name;
-				else if (keyNode.type === "Literal") key = propertyKey(literal(keyNode));
+				else if (keyNode.type === "Literal") key = propertyKey(literal$1(keyNode));
 				else throw typeError("Unsupported object property key shape.", keyNode);
 				const name = key === IteratorSymbol ? "[Symbol.iterator]" : key === AsyncIteratorSymbol ? "[Symbol.asyncIterator]" : String(key);
 				define(objectValue, key, yield* self.evaluateNamed(property.value, name));
@@ -25755,7 +25755,7 @@ const executeProgram = (code, prepared, limits, hooks, globals) => {
 		const logged = () => logs.length > 0 ? { logs: [...logs] } : {};
 		let returned;
 		const base = acquireUseRelease(make$10("parallel"), (scope) => gen(function* () {
-			const program = parseProgram(code);
+			const program = parseProgram$1(code);
 			const pending = new Pending(scope, builtins.Promise);
 			const ctx = new Interpreter({
 				tools,
@@ -25812,7 +25812,7 @@ const executeProgram = (code, prepared, limits, hooks, globals) => {
 		})), map((result) => limits.maxOutputBytes === void 0 ? result : boundOutput(result, limits.maxOutputBytes)));
 	});
 };
-const parseProgram = (code) => {
+const parseProgram$1 = (code) => {
 	return parse$1(code, {
 		ecmaVersion: "latest",
 		sourceType: "script",
@@ -26106,7 +26106,291 @@ const make = (options = {}) => {
 	};
 };
 decodeUnknownOption(fromJsonString(Unknown));
+// node_modules/acorn-walk/dist/walk.mjs
+function simple(node, visitors, baseVisitor, state, override) {
+	if (!baseVisitor) baseVisitor = base;
+	(function c(node, st, override) {
+		var type = override || node.type;
+		visitNode(baseVisitor, type, node, st, c);
+		if (visitors[type]) visitors[type](node, st);
+	})(node, state, override);
+}
+function ancestor(node, visitors, baseVisitor, state, override) {
+	var ancestors = [];
+	if (!baseVisitor) baseVisitor = base;
+	(function c(node, st, override) {
+		var type = override || node.type;
+		var isNew = node !== ancestors[ancestors.length - 1];
+		if (isNew) ancestors.push(node);
+		visitNode(baseVisitor, type, node, st, c);
+		if (visitors[type]) visitors[type](node, st || ancestors, ancestors);
+		if (isNew) ancestors.pop();
+	})(node, state, override);
+}
+function skipThrough(node, st, c) {
+	c(node, st);
+}
+function ignore(_node, _st, _c) {}
+function visitNode(baseVisitor, type, node, st, c) {
+	if (baseVisitor[type] == null) throw new Error("No walker function defined for node type " + type);
+	baseVisitor[type](node, st, c);
+}
+var base = {};
+base.Program = base.BlockStatement = base.StaticBlock = function(node, st, c) {
+	for (var i = 0, list = node.body; i < list.length; i += 1) {
+		var stmt = list[i];
+		c(stmt, st, "Statement");
+	}
+};
+base.Statement = skipThrough;
+base.EmptyStatement = ignore;
+base.ExpressionStatement = base.ParenthesizedExpression = base.ChainExpression = function(node, st, c) {
+	return c(node.expression, st, "Expression");
+};
+base.IfStatement = function(node, st, c) {
+	c(node.test, st, "Expression");
+	c(node.consequent, st, "Statement");
+	if (node.alternate) c(node.alternate, st, "Statement");
+};
+base.LabeledStatement = function(node, st, c) {
+	return c(node.body, st, "Statement");
+};
+base.BreakStatement = base.ContinueStatement = ignore;
+base.WithStatement = function(node, st, c) {
+	c(node.object, st, "Expression");
+	c(node.body, st, "Statement");
+};
+base.SwitchStatement = function(node, st, c) {
+	c(node.discriminant, st, "Expression");
+	for (var i = 0, list = node.cases; i < list.length; i += 1) {
+		var cs = list[i];
+		c(cs, st);
+	}
+};
+base.SwitchCase = function(node, st, c) {
+	if (node.test) c(node.test, st, "Expression");
+	for (var i = 0, list = node.consequent; i < list.length; i += 1) {
+		var cons = list[i];
+		c(cons, st, "Statement");
+	}
+};
+base.ReturnStatement = base.YieldExpression = base.AwaitExpression = function(node, st, c) {
+	if (node.argument) c(node.argument, st, "Expression");
+};
+base.ThrowStatement = base.SpreadElement = function(node, st, c) {
+	return c(node.argument, st, "Expression");
+};
+base.TryStatement = function(node, st, c) {
+	c(node.block, st, "Statement");
+	if (node.handler) c(node.handler, st);
+	if (node.finalizer) c(node.finalizer, st, "Statement");
+};
+base.CatchClause = function(node, st, c) {
+	if (node.param) c(node.param, st, "Pattern");
+	c(node.body, st, "Statement");
+};
+base.WhileStatement = base.DoWhileStatement = function(node, st, c) {
+	c(node.test, st, "Expression");
+	c(node.body, st, "Statement");
+};
+base.ForStatement = function(node, st, c) {
+	if (node.init) c(node.init, st, "ForInit");
+	if (node.test) c(node.test, st, "Expression");
+	if (node.update) c(node.update, st, "Expression");
+	c(node.body, st, "Statement");
+};
+base.ForInStatement = base.ForOfStatement = function(node, st, c) {
+	c(node.left, st, "ForInit");
+	c(node.right, st, "Expression");
+	c(node.body, st, "Statement");
+};
+base.ForInit = function(node, st, c) {
+	if (node.type === "VariableDeclaration") c(node, st);
+	else c(node, st, "Expression");
+};
+base.DebuggerStatement = ignore;
+base.FunctionDeclaration = function(node, st, c) {
+	return c(node, st, "Function");
+};
+base.VariableDeclaration = function(node, st, c) {
+	for (var i = 0, list = node.declarations; i < list.length; i += 1) {
+		var decl = list[i];
+		c(decl, st);
+	}
+};
+base.VariableDeclarator = function(node, st, c) {
+	c(node.id, st, "Pattern");
+	if (node.init) c(node.init, st, "Expression");
+};
+base.Function = function(node, st, c) {
+	if (node.id) c(node.id, st, "Pattern");
+	for (var i = 0, list = node.params; i < list.length; i += 1) {
+		var param = list[i];
+		c(param, st, "Pattern");
+	}
+	c(node.body, st, node.expression ? "Expression" : "Statement");
+};
+base.Pattern = function(node, st, c) {
+	if (node.type === "Identifier") c(node, st, "VariablePattern");
+	else if (node.type === "MemberExpression") c(node, st, "MemberPattern");
+	else c(node, st);
+};
+base.VariablePattern = ignore;
+base.MemberPattern = skipThrough;
+base.RestElement = function(node, st, c) {
+	return c(node.argument, st, "Pattern");
+};
+base.ArrayPattern = function(node, st, c) {
+	for (var i = 0, list = node.elements; i < list.length; i += 1) {
+		var elt = list[i];
+		if (elt) c(elt, st, "Pattern");
+	}
+};
+base.ObjectPattern = function(node, st, c) {
+	for (var i = 0, list = node.properties; i < list.length; i += 1) {
+		var prop = list[i];
+		if (prop.type === "Property") {
+			if (prop.computed) c(prop.key, st, "Expression");
+			c(prop.value, st, "Pattern");
+		} else if (prop.type === "RestElement") c(prop.argument, st, "Pattern");
+	}
+};
+base.Expression = skipThrough;
+base.ThisExpression = base.Super = base.MetaProperty = ignore;
+base.ArrayExpression = function(node, st, c) {
+	for (var i = 0, list = node.elements; i < list.length; i += 1) {
+		var elt = list[i];
+		if (elt) c(elt, st, "Expression");
+	}
+};
+base.ObjectExpression = function(node, st, c) {
+	for (var i = 0, list = node.properties; i < list.length; i += 1) {
+		var prop = list[i];
+		c(prop, st);
+	}
+};
+base.FunctionExpression = base.ArrowFunctionExpression = base.FunctionDeclaration;
+base.SequenceExpression = function(node, st, c) {
+	for (var i = 0, list = node.expressions; i < list.length; i += 1) {
+		var expr = list[i];
+		c(expr, st, "Expression");
+	}
+};
+base.TemplateLiteral = function(node, st, c) {
+	for (var i = 0, list = node.quasis; i < list.length; i += 1) {
+		var quasi = list[i];
+		c(quasi, st);
+	}
+	for (var i$1 = 0, list$1 = node.expressions; i$1 < list$1.length; i$1 += 1) {
+		var expr = list$1[i$1];
+		c(expr, st, "Expression");
+	}
+};
+base.TemplateElement = ignore;
+base.UnaryExpression = base.UpdateExpression = function(node, st, c) {
+	c(node.argument, st, "Expression");
+};
+base.BinaryExpression = base.LogicalExpression = function(node, st, c) {
+	c(node.left, st, "Expression");
+	c(node.right, st, "Expression");
+};
+base.AssignmentExpression = base.AssignmentPattern = function(node, st, c) {
+	c(node.left, st, "Pattern");
+	c(node.right, st, "Expression");
+};
+base.ConditionalExpression = function(node, st, c) {
+	c(node.test, st, "Expression");
+	c(node.consequent, st, "Expression");
+	c(node.alternate, st, "Expression");
+};
+base.NewExpression = base.CallExpression = function(node, st, c) {
+	c(node.callee, st, "Expression");
+	if (node.arguments) for (var i = 0, list = node.arguments; i < list.length; i += 1) {
+		var arg = list[i];
+		c(arg, st, "Expression");
+	}
+};
+base.MemberExpression = function(node, st, c) {
+	c(node.object, st, "Expression");
+	if (node.computed) c(node.property, st, "Expression");
+};
+base.ExportNamedDeclaration = base.ExportDefaultDeclaration = function(node, st, c) {
+	if (node.declaration) c(node.declaration, st, node.type === "ExportNamedDeclaration" || node.declaration.id ? "Statement" : "Expression");
+	if (node.source) c(node.source, st, "Expression");
+	if (node.attributes) for (var i = 0, list = node.attributes; i < list.length; i += 1) {
+		var attr = list[i];
+		c(attr, st);
+	}
+};
+base.ExportAllDeclaration = function(node, st, c) {
+	if (node.exported) c(node.exported, st);
+	c(node.source, st, "Expression");
+	if (node.attributes) for (var i = 0, list = node.attributes; i < list.length; i += 1) {
+		var attr = list[i];
+		c(attr, st);
+	}
+};
+base.ImportAttribute = function(node, st, c) {
+	c(node.value, st, "Expression");
+};
+base.ImportDeclaration = function(node, st, c) {
+	for (var i = 0, list = node.specifiers; i < list.length; i += 1) {
+		var spec = list[i];
+		c(spec, st);
+	}
+	c(node.source, st, "Expression");
+	if (node.attributes) for (var i$1 = 0, list$1 = node.attributes; i$1 < list$1.length; i$1 += 1) {
+		var attr = list$1[i$1];
+		c(attr, st);
+	}
+};
+base.ImportExpression = function(node, st, c) {
+	c(node.source, st, "Expression");
+	if (node.options) c(node.options, st, "Expression");
+};
+base.ImportSpecifier = base.ImportDefaultSpecifier = base.ImportNamespaceSpecifier = base.Identifier = base.PrivateIdentifier = base.Literal = ignore;
+base.TaggedTemplateExpression = function(node, st, c) {
+	c(node.tag, st, "Expression");
+	c(node.quasi, st, "Expression");
+};
+base.ClassDeclaration = base.ClassExpression = function(node, st, c) {
+	return c(node, st, "Class");
+};
+base.Class = function(node, st, c) {
+	if (node.id) c(node.id, st, "Pattern");
+	if (node.superClass) c(node.superClass, st, "Expression");
+	c(node.body, st);
+};
+base.ClassBody = function(node, st, c) {
+	for (var i = 0, list = node.body; i < list.length; i += 1) {
+		var elt = list[i];
+		c(elt, st);
+	}
+};
+base.MethodDefinition = base.PropertyDefinition = base.Property = function(node, st, c) {
+	if (node.computed) c(node.key, st, "Expression");
+	if (node.value) c(node.value, st, "Expression");
+};
 // build/runtime.ts
+const SAVE = "__cc_save";
+const VALUE_BYTES = 1e5;
+const NOTEBOOK_BYTES = 1e6;
+const CONDITIONAL = /* @__PURE__ */ new Set([
+	"IfStatement",
+	"ConditionalExpression",
+	"LogicalExpression",
+	"ChainExpression",
+	"SwitchStatement",
+	"TryStatement",
+	"ForStatement",
+	"ForInStatement",
+	"ForOfStatement",
+	"WhileStatement",
+	"DoWhileStatement",
+	"FunctionExpression",
+	"ArrowFunctionExpression",
+	"FunctionDeclaration"
+]);
 const output = {
 	type: "object",
 	properties: {
@@ -26123,17 +26407,209 @@ const output = {
 		"result"
 	]
 };
-const execute = (code, tools, call, signal) => runPromise(execute$1({
-	code,
-	tools: Object.fromEntries(tools.map((tool) => [tool.name, make$2({
-		description: tool.description,
-		input: { type: "object" },
-		output,
-		execute: (input) => tryPromise(() => call(tool.name, input))
-	})])),
-	limits: {
-		maxToolCalls: 200,
-		maxOutputBytes: 1e5
+const sorted = (value) => Array.isArray(value) ? value.map(sorted) : typeof value === "object" && value !== null ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, sorted(item)])) : value;
+const callKey = (name, input) => `${name} ${JSON.stringify(sorted(input))}`;
+const literal = (node) => {
+	switch (node?.type) {
+		case "Literal": return typeof node.value === "string" || typeof node.value === "number" || typeof node.value === "boolean" || node.value === null ? { value: node.value } : void 0;
+		case "TemplateLiteral": {
+			const cooked = node.expressions.length === 0 ? node.quasis[0]?.value.cooked : void 0;
+			return typeof cooked === "string" ? { value: cooked } : void 0;
+		}
+		case "UnaryExpression": {
+			const inner = node.operator === "-" ? literal(node.argument) : void 0;
+			return typeof inner?.value === "number" ? { value: -inner.value } : void 0;
+		}
+		case "ArrayExpression": {
+			const items = node.elements.map(literal);
+			return items.every((item) => item !== void 0) ? { value: items.map((item) => item.value) } : void 0;
+		}
+		case "ObjectExpression": {
+			const entries = node.properties.map((property) => {
+				if (property.type !== "Property" || property.kind !== "init" || property.computed || property.method) return;
+				const key = property.key.type === "Identifier" ? property.key.name : property.key.type === "Literal" && typeof property.key.value === "string" ? property.key.value : void 0;
+				const value = literal(property.value);
+				return key === void 0 || value === void 0 ? void 0 : [key, value.value];
+			});
+			return entries.every((entry) => entry !== void 0) ? { value: Object.fromEntries(entries) } : void 0;
+		}
+		default: return;
 	}
-}), { signal });
-export { execute };
+};
+const toolName = ({ callee }) => {
+	if (callee.type !== "MemberExpression" || callee.object.type !== "Identifier" || callee.object.name !== "tools") return;
+	if (!callee.computed && callee.property.type === "Identifier") return { name: callee.property.name };
+	return { name: callee.property.type === "Literal" && typeof callee.property.value === "string" ? callee.property.value : void 0 };
+};
+const plan = (program) => {
+	const planned = [];
+	for (const statement of program.body) {
+		let opaque = false;
+		const calls = [];
+		ancestor(statement, { CallExpression(node, _, ancestors) {
+			const tool = toolName(node);
+			if (tool === void 0) {
+				if (node.callee.type === "Identifier" && node.callee.name !== "search") opaque = true;
+				return;
+			}
+			if (tool.name === void 0) {
+				opaque = true;
+				return;
+			}
+			const argument = !ancestors.slice(0, -1).some((node) => CONDITIONAL.has(node.type)) && node.arguments.length === 1 ? literal(node.arguments[0] ?? null) : void 0;
+			calls.push({
+				name: tool.name,
+				input: argument?.value,
+				at: node.start
+			});
+		} });
+		if (opaque) break;
+		planned.push(...calls.sort((a, b) => a.at - b.at));
+	}
+	return planned;
+};
+const patternNames = (pattern) => {
+	switch (pattern.type) {
+		case "Identifier": return [pattern.name];
+		case "ObjectPattern": return pattern.properties.flatMap((p) => patternNames(p.type === "RestElement" ? p.argument : p.value));
+		case "ArrayPattern": return pattern.elements.flatMap((element) => element === null ? [] : patternNames(element));
+		case "RestElement": return patternNames(pattern.argument);
+		case "AssignmentPattern": return patternNames(pattern.left);
+		default: return [];
+	}
+};
+const withNotebook = (code, program, notebook) => {
+	const declared = program.body.flatMap((statement) => statement.type === "VariableDeclaration" ? statement.declarations.flatMap((d) => patternNames(d.id)).map((name) => ({
+		name,
+		end: statement.end
+	})) : []);
+	const used = /* @__PURE__ */ new Set();
+	simple(program, { Identifier: (node) => void used.add(node.name) });
+	const own = new Set(declared.map((d) => d.name));
+	const prefix = Object.keys(notebook).filter((name) => used.has(name) && !own.has(name)).map((name) => `const ${name} = JSON.parse(${JSON.stringify(JSON.stringify(notebook[name]))});`);
+	if (declared.length === 0) return prefix.join(" ") + (prefix.length ? " " : "") + code;
+	const save = (at) => `await tools.${SAVE}({ ${declared.filter((d) => d.end <= at).map((d) => `${JSON.stringify(d.name)}: ${d.name}`).join(", ")} });`;
+	const edits = [];
+	ancestor(program, { ReturnStatement(node, _, ancestors) {
+		if (ancestors.some((a) => a.type.includes("Function"))) return;
+		const value = node.argument ? code.slice(node.argument.start, node.argument.end) : "undefined";
+		edits.push({
+			start: node.start,
+			end: node.end,
+			text: `{ const __ccValue = (${value}); ${save(node.start)} return __ccValue }`
+		});
+	} });
+	const last = program.body.at(-1);
+	if (last?.type === "ExpressionStatement") {
+		const value = code.slice(last.expression.start, last.expression.end);
+		edits.push({
+			start: last.start,
+			end: last.end,
+			text: `{ const __ccValue = (${value}); ${save(last.start)} return __ccValue }`
+		});
+	} else if (last?.type !== "ReturnStatement") edits.push({
+		start: code.length,
+		end: code.length,
+		text: `\n{ ${save(code.length)} return }`
+	});
+	const body = edits.sort((a, b) => b.start - a.start).reduce((text, edit) => text.slice(0, edit.start) + edit.text + text.slice(edit.end), code);
+	return prefix.join(" ") + (prefix.length ? " " : "") + body;
+};
+const nextNotebook = (notebook, saved) => {
+	const fresh = Object.entries(saved).flatMap(([name, value]) => {
+		const json = JSON.stringify(value);
+		return json === void 0 ? [] : [{
+			name,
+			json
+		}];
+	});
+	const tooBig = fresh.filter((entry) => entry.json.length > VALUE_BYTES).map((entry) => entry.name);
+	const kept = fresh.filter((entry) => entry.json.length <= VALUE_BYTES);
+	const names = new Set(kept.map((entry) => entry.name));
+	const older = Object.entries(notebook).filter(([name]) => !names.has(name)).map(([name, value]) => ({
+		name,
+		json: JSON.stringify(value)
+	}));
+	let bytes = 0;
+	const next = {};
+	for (const entry of [...kept].reverse().concat([...older].reverse())) {
+		bytes += entry.json.length;
+		if (bytes > NOTEBOOK_BYTES) break;
+		next[entry.name] = JSON.parse(entry.json);
+	}
+	return {
+		notebook: next,
+		saved: kept.map((entry) => entry.name),
+		tooBig
+	};
+};
+const parseProgram = (code) => {
+	try {
+		return parse$1(code, {
+			ecmaVersion: "latest",
+			sourceType: "script",
+			allowReturnOutsideFunction: true,
+			allowAwaitOutsideFunction: true
+		});
+	} catch {
+		return;
+	}
+};
+const execute = async (code, tools, call, options) => {
+	const program = parseProgram(code);
+	const planned = program ? plan(program) : [];
+	const verdicts = await Promise.all(planned.map((p) => options.speculate(p.name, p.input)));
+	const stop = verdicts.indexOf("stop");
+	const early = /* @__PURE__ */ new Map();
+	let started = 0;
+	planned.slice(0, stop === -1 ? void 0 : stop).forEach(({ name, input }, i) => {
+		if (verdicts[i] !== "start") return;
+		const run = call(name, input);
+		run.catch(() => {});
+		early.set(callKey(name, input), [...early.get(callKey(name, input)) ?? [], run]);
+		started += 1;
+	});
+	let used = 0;
+	let saved = {};
+	const host = (name, input) => {
+		const run = early.get(callKey(name, input))?.shift();
+		if (run === void 0) return call(name, input);
+		used += 1;
+		return run;
+	};
+	const result = await runPromise(execute$1({
+		code: program ? withNotebook(code, program, options.notebook) : code,
+		tools: {
+			...Object.fromEntries(tools.map((tool) => [tool.name, make$2({
+				description: tool.description,
+				input: { type: "object" },
+				output,
+				execute: (input) => tryPromise(() => host(tool.name, input))
+			})])),
+			[SAVE]: make$2({
+				description: "Internal to cc-codemod, never call it.",
+				input: { type: "object" },
+				output: { type: "object" },
+				execute: (input) => sync(() => {
+					saved = typeof input === "object" && input !== null ? { ...input } : {};
+					return {};
+				})
+			})
+		},
+		limits: {
+			maxToolCalls: 200,
+			maxOutputBytes: 1e5
+		}
+	}), { signal: options.signal });
+	const next = result.ok ? nextNotebook(options.notebook, saved) : void 0;
+	return {
+		...result,
+		toolCalls: result.toolCalls.filter((c) => c.name !== SAVE),
+		early: used,
+		unused: started - used,
+		notebook: next?.notebook,
+		saved: next?.saved ?? [],
+		tooBig: next?.tooBig ?? []
+	};
+};
+export { callKey, execute };

@@ -4,10 +4,12 @@
   "type": "module",
   "scripts": {
     "build": "vp pack",
-    "check": "vp check && tsrs --noEmit -p . && claude plugin validate ."
+    "check": "vp check && tsrs --noEmit -p . && tsrs -p build && claude plugin validate ."
   },
   "dependencies": {
-    "@opencode/codemode": "2.1.4"
+    "@opencode/codemode": "2.1.4",
+    "acorn": "8.15.0",
+    "acorn-walk": "^8.3.5"
   },
   "devDependencies": {
     "tsrs": "^0.18.0-ts7.1.0-dev.20260929",
