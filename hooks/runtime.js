@@ -20693,8 +20693,12 @@ var maxResponseBodyBytes = 50 * 1024 * 1024;
 // runtime.ts
 var output = {
   type: "object",
-  properties: { text: { type: "string" }, isError: { type: "boolean" } },
-  required: ["text", "isError"]
+  properties: {
+    text: { type: "string", description: "What the direct tool call would have shown" },
+    isError: { type: "boolean" },
+    result: { description: "The tool's structured output" }
+  },
+  required: ["text", "isError", "result"]
 };
 var execute2 = (code, tools, call, signal) => runPromise2(execute({
   code,
