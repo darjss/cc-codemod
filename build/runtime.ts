@@ -2,6 +2,9 @@ import { CodeMode, Tool } from '@opencode/codemode'
 import { parse, type AnyNode, type CallExpression, type Pattern, type Program } from 'acorn'
 import { ancestor, simple } from 'acorn-walk'
 import { Effect } from 'effect'
+import { parse as parseShell, quote } from 'shell-quote'
+
+export { quote as shellQuote }
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type HostTool = { readonly name: string; readonly description: string }
@@ -54,6 +57,37 @@ const sorted = (value: unknown): unknown =>
       : value
 
 export const callKey = (name: string, input: unknown) => `${name} ${JSON.stringify(sorted(input))}`
+
+// The simple commands of a shell line joined by `&&`, `||`, `;` and `|`, with `$HOME` filled in and stderr sent to
+// stdout or /dev/null dropped. Undefined for anything else: another variable, a substitution, a redirect, a subshell.
+export const shellSegments = (command: string, home: string) => {
+  let otherVariable = false
+  const tokens = parseShell(command, key => {
+    if (key === 'HOME') return home
+    otherVariable = true
+    return ''
+  })
+  if (otherVariable) return undefined
+  const segments: string[][] = [[]]
+  let skip = false
+  for (const [i, token] of tokens.entries()) {
+    const words = segments.at(-1) ?? []
+    if (skip) skip = false
+    else if (typeof token === 'string') words.push(token)
+    else if ('comment' in token) break
+    else if ('pattern' in token) words.push(token.pattern)
+    else if (['&&', '||', ';', '|'].includes(token.op)) segments.push([])
+    else if (
+      (token.op === '>&' || token.op === '>') &&
+      ['1', '2'].includes(words.at(-1) ?? '') &&
+      ['1', '/dev/null'].includes(String(tokens[i + 1]))
+    ) {
+      words.pop()
+      skip = true
+    } else return undefined
+  }
+  return segments.filter(words => words.length > 0).map(words => ({ words, text: quote(words) }))
+}
 
 // The value of an argument written as plain data, or undefined when it reads anything at run time.
 const literal = (node: AnyNode | null): { value: Json } | undefined => {

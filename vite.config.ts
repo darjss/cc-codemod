@@ -18,12 +18,13 @@ export default defineConfig({
     outputOptions: { codeSplitting: false },
     plugins: [
       {
-        // The mod loader refuses a module whose text holds `import(`, and acorn has one in an error message string.
+        // The mod loader refuses a module whose text holds `import(`. The one bundle has no dynamic import, so each is in
+        // a string (acorn's error messages) or a comment (shell-quote's JSDoc), where `(` reads the same.
         name: 'escape-import-paren',
         // generateBundle runs after minify, which would print an escape made any earlier back as `(`.
         generateBundle: (_, bundle) => {
           for (const file of Object.values(bundle))
-            if (file.type === 'chunk') file.code = file.code.replaceAll('import()', 'import\\u0028)')
+            if (file.type === 'chunk') file.code = file.code.replaceAll('import(', 'import\\u0028')
         },
       },
     ],

@@ -25,6 +25,11 @@ export type Result =
   | (Run & { readonly ok: true; readonly value: unknown; readonly warnings?: ReadonlyArray<Diagnostic> })
   | (Run & { readonly ok: false; readonly error: Diagnostic })
 export declare const callKey: (name: string, input: unknown) => string
+export declare const shellSegments: (
+  command: string,
+  home: string,
+) => ReadonlyArray<{ readonly words: ReadonlyArray<string>; readonly text: string }> | undefined
+export declare const shellQuote: (words: ReadonlyArray<string>) => string
 export declare const execute: (
   code: string,
   tools: ReadonlyArray<HostTool>,

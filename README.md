@@ -44,6 +44,15 @@ const after = await tools.Bash({ command: 'git diff --stat' }) // runs in its pl
 
 The plan ends at the first call that isn't a read, at any command that waits (`sleep`, `until`, `while`, `wait`, `watch`, `timeout`), and at any call of a function the script defined. A call inside a branch, loop or callback never starts early. Core answers `ask` for most Bash reads. Auto mode's classifier settles those, and in other modes the prompt shows up a little sooner than it otherwise would. The idea comes from [OC++](https://github.com/devagrawal09/ocpp)'s speculation.
 
+Core judges a shell line as a whole, and it won't vouch for a few kinds of reads. When it declines, the mod splits the line on `&&`, `||`, `;` and `|` with `shell-quote`. The line still counts as a read if every simple command in it is one of these:
+
+- a command core holds read-only on its own. `$HOME` is filled in first, since core rejects variables
+- `gh pr|run|issue|repo view/list/checks/diff/status`, `gh search`, or `gh api` without `-X`, `-f`, `-F` or `--input`
+- `npm view|info|ls|outdated`, `pnpm ls|why`, `bun pm ls`
+- git in another directory (`git -C X`, `cd X && git ...`) when X is under `~/dev` or `~/.t3/worktrees`. Core refuses git elsewhere because a repo's own config can run commands. Repos under those roots are ones you cloned or made, so they're treated like the working directory, and a clone anywhere else still stops the plan.
+
+Any other variable, a substitution, a redirect other than `2>&1` or `2>/dev/null`, or a subshell stops the plan.
+
 ## Values that carry over
 
 When a run succeeds, its top-level `const` and `let` values that are JSON go into the session's `$.state`. A later run that names one gets it back, so the model can fetch once and filter again without re-reading. A value over 100 KB isn't saved, and the notebook keeps the newest values up to 1 MB. A run that fails saves nothing. This is a small version of OC++'s durable notebook: plain data only, and it's gone when the session ends.

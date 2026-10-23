@@ -1,3 +1,5 @@
+// \0rolldown/runtime.js
+var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod, mod.exports), cb = null), mod.exports);
 // node_modules/effect/dist/Pipeable.js
 /**
 * The `Pipeable` module defines the shared interface and implementation helpers
@@ -26371,7 +26373,342 @@ base.MethodDefinition = base.PropertyDefinition = base.Property = function(node,
 	if (node.computed) c(node.key, st, "Expression");
 	if (node.value) c(node.value, st, "Expression");
 };
+// node_modules/shell-quote/quote.js
+var require_quote = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	/** @import { ControlOperator } from './parse' */
+	/** @type {ControlOperator['op'][]} */
+	var OPS = [
+		"||",
+		"&&",
+		";;&",
+		";;",
+		";&",
+		"|&",
+		"<(",
+		">(",
+		"<<<",
+		"<<-",
+		"<<",
+		">>",
+		">&",
+		">|",
+		"&>>",
+		"&>",
+		"<&",
+		"<>",
+		"&",
+		";",
+		"(",
+		")",
+		"|",
+		"<",
+		">"
+	];
+	var LINE_TERMINATORS = /[\n\r\u2028\u2029]/;
+	var GLOB_SHELL_SPECIAL = /[\s#!"$&'():;<=>@\\^`|~]/g;
+	/** @type {typeof import\u0028'./quote')} */
+	module.exports = function quote(xs) {
+		var sawComment = false;
+		return xs.map(function(s) {
+			if (sawComment && typeof s === "string" && LINE_TERMINATORS.test(s)) throw new TypeError("a token after a `comment` must not contain line terminators");
+			if (s === "") return "''";
+			if (s && typeof s === "object") {
+				if ("op" in s && s.op === "glob") {
+					if (typeof s.pattern !== "string") throw new TypeError("glob token requires a string `pattern`");
+					if (LINE_TERMINATORS.test(s.pattern)) throw new TypeError("glob `pattern` must not contain line terminators");
+					if (s.pattern === "") return "''";
+					return s.pattern.replace(GLOB_SHELL_SPECIAL, "\\$&");
+				}
+				if ("op" in s && typeof s.op === "string") {
+					if (OPS.indexOf(s.op) < 0) throw new TypeError("invalid `op` value: " + JSON.stringify(s.op));
+					return s.op.replace(/[\s\S]/g, "\\$&");
+				}
+				if ("comment" in s && typeof s.comment === "string") {
+					if (LINE_TERMINATORS.test(s.comment)) throw new TypeError("`comment` must not contain line terminators");
+					sawComment = true;
+					return "#" + s.comment;
+				}
+				throw new TypeError("unrecognized object token shape");
+			}
+			if (/'/.test(s) && /!/.test(s)) return "'" + s.replace(/'/g, "'\"'\"'") + "'";
+			if (/["\s\\]/.test(s) && !/'/.test(s)) return "'" + s + "'";
+			if (/["'\s]/.test(s)) return "\"" + s.replace(/(["\\$`])/g, "\\$1") + "\"";
+			return String(s).replace(/([A-Za-z]:)?([#!"$&'()*,:;<=>?@[\\\]^`{|}~])/g, "$1\\$2");
+		}).join(" ");
+	};
+}));
+// node_modules/shell-quote/parse.js
+var require_parse = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	/**
+	* @import {
+	* 	ControlOperator,
+	* 	Env,
+	* 	GlobPattern,
+	* 	ParseEntry,
+	* } from './parse' */
+	var CONTROL = "(?:" + [
+		"\\|\\|",
+		"\\&(?:\\&|>>?)",
+		";;\\&?",
+		"[;|]\\&",
+		"\\<\\(",
+		"\\<\\<\\<",
+		"\\<\\<-",
+		"\\<\\<(?!\\()",
+		">>",
+		">[&|(]",
+		"<[&>]",
+		"[&;()|<>]"
+	].join("|") + ")";
+	var controlRE = new RegExp("^" + CONTROL + "$");
+	var META = "|&;()<> \\t";
+	var SINGLE_QUOTE = "'([^']*?)'";
+	var ANSI_C_BODY = "(?:\\\\[\\s\\S]|[^\\\\'])*?";
+	var ANSI_C_QUOTE = "\\$'" + ANSI_C_BODY + "'";
+	var ansiCAt = new RegExp("\\$'" + ANSI_C_BODY + "(?:(')|\\\\?$)", "g");
+	var ANSI_C_LETTERS = "abeEfnrtv";
+	var ANSI_C_CHARS = "\x07\b\x1B\x1B\f\n\r	\v";
+	var hash = /^#$/;
+	var SQ = "'";
+	var DQ = "\"";
+	var DS = "$";
+	var TOKEN = "";
+	var mult = 4294967296;
+	for (var i = 0; i < 4; i++) TOKEN += (mult * Math.random()).toString(16);
+	var startsWithToken = new RegExp("^" + TOKEN);
+	/**
+	* @param {string} s
+	* @param {RegExp} r
+	*/
+	function matchAll(s, r) {
+		var origIndex = r.lastIndex;
+		var matches = [];
+		var matchObj;
+		while (matchObj = r.exec(s)) {
+			matches[matches.length] = matchObj;
+			if (r.lastIndex === matchObj.index) r.lastIndex += 1;
+		}
+		r.lastIndex = origIndex;
+		return matches;
+	}
+	/**
+	* @param {Env} env
+	* @param {string} pre
+	* @param {string} key
+	*/
+	function getVar(env, pre, key) {
+		var r = typeof env === "function" ? env(key) : env[key];
+		if (typeof r === "undefined" && key != "") r = "";
+		else if (typeof r === "undefined") r = "$";
+		if (typeof r === "object") return pre + TOKEN + JSON.stringify(r) + TOKEN;
+		return pre + r;
+	}
+	var ansiCEscape = /\\([0-7]{1,3}|x[\dA-Fa-f]{1,2}|u[\dA-Fa-f]{1,4}|U[\dA-Fa-f]{1,8}|c(?:\\\\|[\s\S])|[abeEfnrtv\\'"?])/g;
+	/**
+	* @param {string} m
+	* @param {string} escape
+	*/
+	function expandAnsiCEscape(m, escape) {
+		var kind = escape.charAt(0);
+		if (kind === "c") {
+			var ctrl = escape.charAt(1);
+			return ctrl === "?" ? "" : String.fromCharCode(ctrl.charCodeAt(0) & 31);
+		}
+		if (kind === "x" || kind === "u" || kind === "U") {
+			var cp = parseInt(escape.slice(1), 16);
+			if (cp > 1114111) return m;
+			return String.fromCharCode.apply(null, cp > 65535 ? [55232 + (cp >> 10), 56320 + (cp & 1023)] : [cp]);
+		}
+		if (kind >= "0" && kind <= "7") return String.fromCharCode(parseInt(escape, 8) & 255);
+		var letter = ANSI_C_LETTERS.indexOf(escape);
+		return letter < 0 ? escape : ANSI_C_CHARS.charAt(letter);
+	}
+	/** @param {string} body */
+	function expandAnsiC(body) {
+		return body.replace(ansiCEscape, expandAnsiCEscape).split("\0")[0];
+	}
+	/**
+	* @param {string} s
+	* @param {number} i
+	*/
+	function closesAnsiC(s, i) {
+		ansiCAt.lastIndex = i;
+		return !!ansiCAt.exec(s)[1];
+	}
+	/**
+	* @param {string} string
+	* @param {Env} [env]
+	* @param {{ escape?: string, splitUnquoted?: boolean | string }} [opts]
+	* @returns {ParseEntry[]}
+	*/
+	function parseInternal(string, env, opts) {
+		if (!opts) opts = {};
+		var BS = opts.escape || "\\";
+		var ifs = opts.splitUnquoted === true ? " 	\n" : typeof opts.splitUnquoted === "string" ? opts.splitUnquoted : "";
+		var BAREWORD = "(\\" + BS + "['\"$\\" + BS + META + "]|\\$\\$|\\$(?!" + ANSI_C_QUOTE.slice(2) + ")|[^\\s'\"$" + META + "])+";
+		var DOUBLE_QUOTE = "\"(?:\\" + BS + "[\\s\\S]|[^\"\\" + BS + "])*\"";
+		var matches = matchAll(string, new RegExp(["(" + CONTROL + ")", "(" + ANSI_C_QUOTE + "|" + BAREWORD + "|" + DOUBLE_QUOTE + "|" + SINGLE_QUOTE + ")+"].join("|"), "g"));
+		if (matches.length === 0) return [];
+		if (!env) env = {};
+		var commented = false;
+		return matches.map(function(match) {
+			var s = match[0];
+			if (!s || commented) return;
+			if (controlRE.test(s)) return { op: s };
+			/** @type {string | boolean} */
+			var quote = false;
+			var esc = false;
+			var out = "";
+			/** @type {string[]} */
+			var words = [];
+			var sawQuote = false;
+			/** @type {number | null} */
+			var pendingNw = null;
+			var isGlob = false;
+			/** @type {number} */
+			var i;
+			function parseEnvVar() {
+				i += 1;
+				/** @type {number | RegExpMatchArray | null} */
+				var varend;
+				/** @type {string} */
+				var varname;
+				var char = s.charAt(i);
+				if (char === "{") {
+					i += 1;
+					if (s.charAt(i) === "}") throw new Error("Bad substitution: " + s.slice(i - 2, i + 1));
+					var depth = 1;
+					varend = i;
+					while (depth > 0 && varend < s.length) {
+						if (s.charAt(varend) === "{" && s.charAt(varend - 1) === "$") depth += 1;
+						else if (s.charAt(varend) === "}") depth -= 1;
+						varend += 1;
+					}
+					if (depth !== 0) throw new Error("Bad substitution: " + s.slice(i));
+					varend -= 1;
+					varname = s.slice(i, varend);
+					i = varend;
+				} else if (/[*@#?$!-]/.test(char)) varname = char;
+				else {
+					var slicedFromI = s.slice(i);
+					varend = slicedFromI.match(/[^\w\d_]/);
+					if (!varend) {
+						varname = slicedFromI;
+						i = s.length;
+					} else {
+						varname = slicedFromI.slice(0, varend.index);
+						i += varend.index - 1;
+					}
+				}
+				return getVar(env, "", varname);
+			}
+			function flushRun() {
+				if (pendingNw === null) return;
+				if (pendingNw === 0) {
+					if (out !== "") {
+						words[words.length] = out;
+						out = "";
+					}
+				} else {
+					words[words.length] = out;
+					out = "";
+					for (var fe = 1; fe < pendingNw; fe += 1) words[words.length] = "";
+				}
+				pendingNw = null;
+			}
+			for (i = 0; i < s.length; i++) {
+				var c = s.charAt(i);
+				if (ifs && c !== DS) flushRun();
+				isGlob = isGlob || !quote && (c === "*" || c === "?");
+				if (esc) {
+					out += c;
+					esc = false;
+				} else if (quote) {
+					if (c === quote) quote = false;
+					else if (quote == SQ) out += c;
+					else if (c === BS) {
+						i += 1;
+						c = s.charAt(i);
+						if (c === DQ || c === BS || c === DS) out += c;
+						else out += BS + c;
+					} else if (c === DS) out += parseEnvVar();
+					else out += c;
+				} else if (c === DQ || c === SQ) {
+					quote = c;
+					sawQuote = true;
+				} else if (controlRE.test(c)) return { op: s };
+				else if (hash.test(c)) {
+					commented = true;
+					var commentObj = { comment: string.slice(match.index + i + 1) };
+					if (out.length) return [out, commentObj];
+					return [commentObj];
+				} else if (c === BS) esc = true;
+				else if (c === DS && s.charAt(i + 1) === SQ && closesAnsiC(s, i)) {
+					flushRun();
+					sawQuote = true;
+					out += expandAnsiC(s.slice(i + 2, ansiCAt.lastIndex - 1));
+					i = ansiCAt.lastIndex - 1;
+				} else if (c === DS) {
+					var value = parseEnvVar();
+					if (!ifs) out += value;
+					else for (var vi = 0; vi < value.length; vi += 1) {
+						var vc = value.charAt(vi);
+						if (ifs.indexOf(vc) < 0) {
+							flushRun();
+							out += vc;
+						} else if (pendingNw === null) pendingNw = vc === " " || vc === "	" || vc === "\n" ? 0 : 1;
+						else if (vc !== " " && vc !== "	" && vc !== "\n") pendingNw += 1;
+					}
+				} else out += c;
+			}
+			if (isGlob) return {
+				op: "glob",
+				pattern: out
+			};
+			if (ifs) {
+				if (pendingNw !== null && pendingNw > 0) {
+					words[words.length] = out;
+					out = "";
+					for (var te = 1; te < pendingNw; te += 1) words[words.length] = "";
+				}
+				if (out !== "" || sawQuote && words.length === 0) words[words.length] = out;
+				return words;
+			}
+			return out;
+		}).reduce(function(prev, arg) {
+			if (typeof arg === "undefined") return prev;
+			/** @type {ParseEntry[]} */ [].concat(arg).forEach(function(entry) {
+				prev[prev.length] = entry;
+			});
+			return prev;
+		}, []);
+	}
+	/** @type {typeof import\u0028'./parse')} */
+	module.exports = function parse(s, env, opts) {
+		var mapped = parseInternal(s, env, opts);
+		if (typeof env !== "function") return mapped;
+		return mapped.reduce(function(acc, s) {
+			if (typeof s === "object") {
+				acc[acc.length] = s;
+				return acc;
+			}
+			var xs = s.split(RegExp("(" + TOKEN + ".*?" + TOKEN + ")", "g"));
+			if (xs.length === 1) {
+				acc[acc.length] = xs[0];
+				return acc;
+			}
+			xs.filter(Boolean).forEach(function(x) {
+				acc[acc.length] = startsWithToken.test(x) ? JSON.parse(x.split(TOKEN)[1]) : x;
+			});
+			return acc;
+		}, []);
+	};
+}));
 // build/runtime.ts
+var import_shell_quote = (/* @__PURE__ */ __commonJSMin(((exports) => {
+	exports.quote = require_quote();
+	exports.parse = require_parse();
+})))();
 const SAVE = "__cc_save";
 const VALUE_BYTES = 1e5;
 const NOTEBOOK_BYTES = 1e6;
@@ -26409,6 +26746,38 @@ const output = {
 };
 const sorted = (value) => Array.isArray(value) ? value.map(sorted) : typeof value === "object" && value !== null ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, sorted(item)])) : value;
 const callKey = (name, input) => `${name} ${JSON.stringify(sorted(input))}`;
+const shellSegments = (command, home) => {
+	let otherVariable = false;
+	const tokens = (0, import_shell_quote.parse)(command, (key) => {
+		if (key === "HOME") return home;
+		otherVariable = true;
+		return "";
+	});
+	if (otherVariable) return void 0;
+	const segments = [[]];
+	let skip = false;
+	for (const [i, token] of tokens.entries()) {
+		const words = segments.at(-1) ?? [];
+		if (skip) skip = false;
+		else if (typeof token === "string") words.push(token);
+		else if ("comment" in token) break;
+		else if ("pattern" in token) words.push(token.pattern);
+		else if ([
+			"&&",
+			"||",
+			";",
+			"|"
+		].includes(token.op)) segments.push([]);
+		else if ((token.op === ">&" || token.op === ">") && ["1", "2"].includes(words.at(-1) ?? "") && ["1", "/dev/null"].includes(String(tokens[i + 1]))) {
+			words.pop();
+			skip = true;
+		} else return void 0;
+	}
+	return segments.filter((words) => words.length > 0).map((words) => ({
+		words,
+		text: (0, import_shell_quote.quote)(words)
+	}));
+};
 const literal = (node) => {
 	switch (node?.type) {
 		case "Literal": return typeof node.value === "string" || typeof node.value === "number" || typeof node.value === "boolean" || node.value === null ? { value: node.value } : void 0;
@@ -26612,4 +26981,5 @@ const execute = async (code, tools, call, options) => {
 		tooBig: next?.tooBig ?? []
 	};
 };
-export { callKey, execute };
+var quote = import_shell_quote.quote;
+export { callKey, execute, quote as shellQuote, shellSegments };
