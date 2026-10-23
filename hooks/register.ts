@@ -1,7 +1,7 @@
 import type { Register, ToolCallArgs } from 'claude-code'
 import { execute, type Result } from './runtime.js'
 
-const SELF = 'mcp__codemode__run'
+const SELF = 'mcp__cc-codemod__run'
 const RETURN_NUDGE = 8_000
 
 const DESCRIPTION = `Run JavaScript that calls your other tools and return only what answers the question. Reach for it to fan out (three or more independent reads, searches or commands in one step, often across repos or many files) or when you need only a slice of a large output. For one or two calls, call the tool directly.
@@ -49,9 +49,9 @@ export const register: Register = on => {
     return started
   })
 
-  on('tool.call', { tool: /^mcp__codemode__run$/ }, async ($, e, next) => {
+  on('tool.call', { tool: /^mcp__cc-codemod__run$/ }, async ($, e, next) => {
     const code = (e as { code?: unknown }).code
-    if (typeof code !== 'string' || code.trim() === '') return { deny: 'codemode: pass JavaScript source as `code`.' }
+    if (typeof code !== 'string' || code.trim() === '') return { deny: 'cc-codemod: pass JavaScript source as `code`.' }
 
     const tools = (await $.tool.list())
       .filter(t => t.name !== SELF)
@@ -60,7 +60,7 @@ export const register: Register = on => {
     let started = 0
     let done = 0
     const outputs: string[] = []
-    const result = await execute(
+    return execute(
       code,
       tools,
       async (name, input) => {
@@ -77,7 +77,12 @@ export const register: Register = on => {
         return { text, isError: ran.isError === true, result: plain(ran.result) }
       },
       next.signal,
-    ).finally(() => $.ui.status(undefined))
-    return { result: render(result, outputs) }
+    )
+      .then(
+        result => ({ result: render(result, outputs) }),
+        // An abort or an interpreter crash rejects. Report it as the tool's output instead of failing the call.
+        (error: unknown) => ({ result: `cc-codemod: ${error instanceof Error ? error.message : String(error)}` }),
+      )
+      .finally(() => $.ui.status(undefined))
   })
 }

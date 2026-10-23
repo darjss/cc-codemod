@@ -1,5 +1,6 @@
 {
-  "name": "codemode",
+  "name": "cc-codemod",
+  "description": "Code mode for Claude Code: one tool that runs JavaScript calling Claude's other tools",
   "owner": { "name": "darjss" },
-  "plugins": [{ "name": "codemode", "source": "./" }]
+  "plugins": [{ "name": "cc-codemod", "source": "./" }]
 }
