@@ -3,13 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "build/build.sh",
-    "check": "tsrs --noEmit -p . && claude plugin validate ."
+    "build": "vp pack",
+    "check": "vp check && tsrs --noEmit -p . && claude plugin validate ."
   },
   "dependencies": {
     "@opencode/codemode": "2.1.4"
   },
   "devDependencies": {
-    "tsrs": "^0.18.0-ts7.1.0-dev.20260929"
+    "tsrs": "^0.18.0-ts7.1.0-dev.20260929",
+    "vite-plus": "^1.4.0"
   }
 }
