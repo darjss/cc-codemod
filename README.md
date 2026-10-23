@@ -25,11 +25,28 @@ Answer `y` to add the marketplace and pick a scope. From a shell, `claude plugin
 - The script's return value, as a string or indented JSON.
 - `console.log` lines, in a `<console>` block.
 - Interpreter warnings, and a note if output hit the 100 KB cap.
-- A `[N tool calls]` footer. If the script returned a large nested output unchanged, the footer says so and asks the model to slice it next time.
+- A footer like `[4 tool calls · 3 started early · saved pkg, log]`. If the script returned a large nested output unchanged, the footer says so and asks the model to slice it next time.
 
 Each nested call resolves to `{ text, isError, result }`. `text` is what the direct call would have shown, and `result` is the tool's structured output. A failed or denied call resolves with `isError: true` and does not throw.
 
 Limits are 200 nested calls and 100 KB of output per run. The language has no classes, imports, timers or fetch.
+
+## Calls that start early
+
+Models write `await` after `await` even when the calls don't depend on each other. Before a run, the mod parses the script with acorn and lists the tool calls of its top-level statements whose arguments are plain literals. It asks core about each one with `$.tool.check`, and every call that core holds read-only and doesn't deny starts at once. When the script reaches the call, it gets the result that's already running.
+
+```js
+const pkg = await tools.Read({ file_path: '/repo/package.json' }) // starts at once
+const log = await tools.Bash({ command: 'git log --oneline -5' }) // starts at once
+await tools.Edit({ file_path: '/repo/a.ts', old_string: 'x', new_string: 'y' }) // a write: the plan ends here
+const after = await tools.Bash({ command: 'git diff --stat' }) // runs in its place, after the Edit
+```
+
+The plan ends at the first call that isn't a read, at any command that waits (`sleep`, `until`, `while`, `wait`, `watch`, `timeout`), and at any call of a function the script defined. A call inside a branch, loop or callback never starts early. Core answers `ask` for most Bash reads. Auto mode's classifier settles those, and in other modes the prompt shows up a little sooner than it otherwise would. The idea comes from [OC++](https://github.com/devagrawal09/ocpp)'s speculation.
+
+## Values that carry over
+
+When a run succeeds, its top-level `const` and `let` values that are JSON go into the session's `$.state`. A later run that names one gets it back, so the model can fetch once and filter again without re-reading. A value over 100 KB isn't saved, and the notebook keeps the newest values up to 1 MB. A run that fails saves nothing. This is a small version of OC++'s durable notebook: plain data only, and it's gone when the session ends.
 
 ## When it helps
 

@@ -78,7 +78,8 @@ export const register: Register = on => {
       .filter(t => t.name !== SELF)
       .map(t => ({ name: t.name, description: (t.description.split('\n')[0] ?? '').slice(0, 200) }))
 
-    // A call starts early only where it would run now without asking anyone, and core holds it read-only.
+    // A call starts early only where core holds it read-only and doesn't refuse it. Core answers `ask` for most Bash
+    // reads, which auto mode's classifier settles, and which would be asked anyway once the program got there.
     const speculate: Speculate = async (name, input) => {
       if (input === undefined) return READS.has(name) ? 'pass' : 'stop'
       if (!READS.has(name) && name !== 'Bash') return 'stop'
@@ -87,7 +88,7 @@ export const register: Register = on => {
       const key = callKey(name, input)
       const isReadOnly = readOnly.get(key) === true
       readOnly.delete(key)
-      return decision === 'allow' && isReadOnly ? 'start' : 'stop'
+      return decision !== 'deny' && isReadOnly ? 'start' : 'stop'
     }
     const { value: notebook = {} } = await $.state.get(NOTEBOOK)
 

@@ -1,9 +1,11 @@
 {
   "name": "cc-codemod",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "types": "./types/index.d.ts",
   "description": "One tool that runs JavaScript calling Claude's other tools, on opencode's interpreter",
-  "author": { "name": "darjss" },
+  "author": {
+    "name": "darjss"
+  },
   "repository": "https://github.com/darjss/cc-codemod",
   "license": "MIT",
   "keywords": ["code mode", "codemode", "tools", "javascript"]
