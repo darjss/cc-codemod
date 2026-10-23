@@ -1,0 +1,8 @@
+{
+  "name": "codemode-mod-build",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode/codemode": "2.1.4"
+  }
+}
