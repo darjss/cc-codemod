@@ -1,1 +1,1 @@
-{ "name": "codemode", "version": "0.3.0", "description": "One tool that runs JavaScript calling Claude's other tools, on opencode's interpreter" }
+{ "name": "codemode", "version": "0.4.0", "description": "One tool that runs JavaScript calling Claude's other tools, on opencode's interpreter" }
