@@ -20,14 +20,19 @@ const RULES = `# Code mode
 Shell commands, file reads and searches go through \`${SELF}\`. Direct Bash and Read are off, except Read for images and PDFs. Edit, Write and the other tools stay direct.
 
 - One script per step of work. Every independent call of that step goes in one \`Promise.all\`: git status, the searches and the file reads together.
-- Return the answer, not the material. Slice the lines you need, match with a regex, count, pick fields. Return whole files or full command output only when the task is to show them. Keep a return under ${RETURN_NUDGE / 1000}k characters.
+- Return the answer, not the material. Slice the lines you need, match with a regex, count, pick fields. Return whole files or full command output only when the task is to show them. Keep a return under ${RETURN_NUDGE / 1000}k characters. Reading a file in full is fine when the task is about that file; read several in one script.
 - \`await tools.Read({ file_path, offset, limit })\` then filter: \`r.text.split("\\n").filter(l => /pattern/.test(l))\`.
 - Bash output over about 30k characters is saved to a file and you get a preview with its path. Narrow it in the command (\`rg -n --max-count\`, \`head\`) instead of reading it back.
 - Long commands still take \`run_in_background\` through \`tools.Bash\`.`
 
 const plain = (value: unknown) => (value === undefined ? null : JSON.parse(JSON.stringify(value)))
 
-const render = (r: Result) => {
+// A return that carries a nested tool's output unchanged and large is the waste worth flagging.
+// A script that sliced or filtered what it read is left alone, however long its answer.
+const passedThrough = (returned: string, outputs: ReadonlyArray<string>) =>
+  outputs.some(t => t.length > RETURN_NUDGE / 2 && returned.includes(t.slice(t.length / 2 - 250, t.length / 2 + 250)))
+
+const render = (r: Result, outputs: ReadonlyArray<string>) => {
   const out: string[] = []
   if (r.ok) out.push(typeof r.value === 'string' ? r.value : JSON.stringify(r.value, null, 1))
   else out.push(`${r.error.kind}: ${r.error.message}`)
@@ -36,8 +41,8 @@ const render = (r: Result) => {
   if (r.truncated) out.push('(output truncated at 100 KB)')
   const text = out.join('\n')
   const nudge =
-    text.length > RETURN_NUDGE
-      ? `\n[${r.toolCalls.length} tool calls · returned ${text.length} chars: filter in the script next time and return only what answers the question]`
+    text.length > RETURN_NUDGE && passedThrough(text, outputs)
+      ? `\n[${r.toolCalls.length} tool calls · returned ${text.length} chars of raw tool output: slice or filter it in the script next time]`
       : `\n[${r.toolCalls.length} tool calls]`
   return text + nudge
 }
@@ -82,6 +87,7 @@ export const register: Register = on => {
 
     let started = 0
     let done = 0
+    const outputs: string[] = []
     const result = await execute(
       code,
       tools,
@@ -94,10 +100,12 @@ export const register: Register = on => {
         done += 1
         $.ui.status(`codemode ${done}/${started} · ${name}`)
         if (ran.deny !== undefined) return { text: ran.deny, isError: true, result: null }
-        return { text: ran.text ?? JSON.stringify(ran.result), isError: ran.isError === true, result: plain(ran.result) }
+        const text = ran.text ?? JSON.stringify(ran.result)
+        outputs.push(text)
+        return { text, isError: ran.isError === true, result: plain(ran.result) }
       },
       next.signal,
     ).finally(() => $.ui.status(undefined))
-    return { result: render(result) }
+    return { result: render(result, outputs) }
   })
 }
