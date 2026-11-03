@@ -100,11 +100,37 @@ The toolchain is [Vite+](https://viteplus.dev). `vp` installs packages, formats 
 
 ```sh
 vp install
-vp run build   # vp pack: bundles build/runtime.ts into hooks/runtime.js
+vp run build   # vp pack: bundles build/runtime.ts into hooks/runtime.js and its chunks
 vp run check   # vp check (format, lint), tsrs typecheck, claude plugin validate
 ```
 
-`hooks/register.ts` is the mod. `build/runtime.ts` wraps `CodeMode.execute` and gets bundled, because the mod loader can't resolve npm packages. The `pack` block in `vite.config.ts` escapes one `import(` in acorn's error strings, since the loader refuses any module text containing it. The types under `.claude-plugin/types/` are written by Claude Code and aren't committed.
+`hooks/register.ts` is the mod. `build/runtime.ts` wraps `CodeMode.execute` and gets bundled, because the mod loader can't resolve npm packages. The `pack` block in `vite.config.ts` escapes one `import(` in acorn's error strings, since the loader refuses any module text containing it. It also minifies the bundle, splits it into `effect.js`, `acorn.js` and `vendor.js` so each file stays under the plugin directory's 256 KiB limit, and writes every non-ASCII character as an escape. The types under `.claude-plugin/types/` are written by Claude Code and aren't committed.
+
+## What the mod accesses
+
+The mod is `hooks/register.ts`. The other files under `hooks/` are the bundled interpreter.
+
+Its hooks:
+
+- `session.start` registers the tool `mcp__cc-codemod__run`.
+- `tool.call` on `mcp__cc-codemod__run` is that tool's own server, so it answers the call itself instead of calling `next`. It stands in for no other tool. If the script names `html_render`, it refuses the call before anything runs.
+- `tool.call` on every other tool passes the call to `next` unchanged and returns what `next` gives back. It may append one line of `context` suggesting a script, at most once per kind per agent loop. That happens after an output over 10,000 characters, and on the third turn in a row with a single read-only call. It never changes, blocks or rewrites a call. Calls the mod makes itself pass straight through.
+- `tool.check` passes every check through unchanged. For checks the mod asks itself, it records whether core held the input read-only.
+
+Tools it runs: only the ones the model's script calls, through `$.tool.call`. Each nested call goes through Claude Code's hooks and permission prompts like a direct call. A script can call any tool the session has, including Bash, Agent and MCP tools, and every command or input comes from that script. The mod runs no fixed commands of its own. Before a run, it asks `$.tool.check` about each top-level call with literal arguments, which runs nothing. It starts a call early only if core holds it read-only and doesn't deny it. That covers Read, Grep, Glob, WebFetch and WebSearch, plus Bash lines that core or the rules in [Calls that start early](#calls-that-start-early) hold read-only.
+
+What it sends, and where:
+
+- The mod makes no network calls and sends nothing off the machine.
+- Nested tools send what they always send when the script calls them. WebFetch fetches its URL, and an MCP tool reaches its server.
+- Top-level JSON values a script declares are kept in the session's `$.state`: up to 100 KB per value and 1 MB in all, gone when the session ends.
+- While a run is going, the status line shows its progress.
+
+What it reads from the machine: only `HOME`, through `$.env.get`. It uses it to expand `~` and `$HOME` in the Bash lines it checks for an early start, and to recognize repos under `~/dev` and `~/.t3/worktrees`. The value is never sent anywhere or shown to the model.
+
+Reflective code: `register.ts` uses none. The bundled interpreter does. Effect, `@opencode/codemode` and acorn use getters, `Proxy` and `then` methods for their own APIs, such as Effect's pipeable and promise interop. The scripts the model writes run inside that interpreter, with no eval and no access to Node.
+
+`plugin.json` names `types/index.d.ts`, the contract for the mod's `$.state` value that `claude plugin validate` checks. Claude Code ignores the field at load time. `package.json` and `bun.lock` are only for building `hooks/*.js`. The plugin starts no MCP server and runs no `npx`.
 
 ## Other code mode plugins for Claude Code
 
