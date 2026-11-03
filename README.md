@@ -1,6 +1,6 @@
-# cc-codemod
+# Claude Code codemode
 
-Code mode for Claude Code. The mod adds one tool, `run`, that takes a JavaScript function body. Inside it, every tool Claude has is an async function: `tools.Bash`, `tools.Read`, `tools.Edit`, and every MCP tool. The script fans out calls, filters what comes back, and returns only the answer. The raw output of the nested calls never enters the context.
+Code mode for Claude Code, after [Cloudflare's Code Mode](https://blog.cloudflare.com/code-mode/). The plugin is called `cc-codemod`. It adds one tool, `run`, that takes a JavaScript function body. Inside it, every tool Claude has is an async function: `tools.Bash`, `tools.Read`, `tools.Edit`, and every MCP tool. The script fans out calls, filters what comes back, and returns only the answer. The raw output of the nested calls never enters the context.
 
 ```js
 const files = ['api.ts', 'db.ts', 'auth.ts']
@@ -10,15 +10,34 @@ return files.map((f, i) => `${f}: ${reads[i].text.split('\n').filter(l => l.incl
 
 The script runs on [opencode's code mode interpreter](https://github.com/anomalyco/opencode/tree/dev/packages/codemode), a pure TypeScript interpreter for a JavaScript subset. There's no eval, no WASM and no Node, so it works inside Claude Code's mod runtime. Nested calls go through `$.tool.call`, which means the usual hooks and permission prompts apply to each one. A Read inside a script counts as a read for Edit's read-before-edit check.
 
+## Why
+
+Every turn re-reads the whole context, and every output Claude reads stays in it until the session ends. In two weeks of my own Claude Code sessions (2,051 tool calls), two patterns cost the most:
+
+- 177 turns went to chains of single reads, where each read depended on the last: `rg`, then `sed -n` around the hit, then `cat` the file it named. Each of those turns re-read about 95K tokens of context.
+- 152 outputs over 10K characters went straight into context, about 750K tokens. 48 of them were `t3_thread_read`, mostly from subagents.
+
+A script runs the whole chain in one turn and returns only the slice that answers the question. Forcing everything through it is worse, though. That cost 3.45M tokens on a research task that took 2.62M with direct tools (see [When it helps](#when-it-helps)). So the plugin aims Claude at those two cases and leaves the rest to direct calls.
+
+## What else it does
+
+- **Early starts.** Reads with literal arguments start before the script reaches them, so `await` after `await` still runs in parallel.
+- **A notebook.** Top-level values persist for the session, so a later run can filter the same data again without fetching it twice.
+- **Your permissions.** Nested calls go through Claude Code's own hooks and permission checks, one call at a time.
+- **Images.** Screenshots and other images from nested calls, such as `html_preview`, reach the model.
+- **Real errors.** A script that throws marks the call as an error.
+- **A guard for T3 Code.** `html_render` is refused inside scripts, because T3 Code shows a page only beside a direct call.
+- **Hints.** After a direct call where a script would have cost less, the next turn gets a one-line hint.
+
 ## Install
 
 At the Claude Code prompt:
 
 ```
-/plugin install cc-codemod --marketplace darjss/cc-codemod
+/plugin install cc-codemod --marketplace darjss/claude-code-codemode
 ```
 
-Answer `y` to add the marketplace and pick a scope. From a shell, `claude plugin marketplace add darjss/cc-codemod` then `claude plugin install cc-codemod@cc-codemod` does the same. The tool shows up as `mcp__cc-codemod__run`.
+Answer `y` to add the marketplace and pick a scope. From a shell, `claude plugin marketplace add darjss/claude-code-codemode` then `claude plugin install cc-codemod@cc-codemod` does the same. The tool shows up as `mcp__cc-codemod__run`.
 
 ## What a call returns
 
@@ -86,6 +105,15 @@ vp run check   # vp check (format, lint), tsrs typecheck, claude plugin validate
 ```
 
 `hooks/register.ts` is the mod. `build/runtime.ts` wraps `CodeMode.execute` and gets bundled, because the mod loader can't resolve npm packages. The `pack` block in `vite.config.ts` escapes one `import(` in acorn's error strings, since the loader refuses any module text containing it. The types under `.claude-plugin/types/` are written by Claude Code and aren't committed.
+
+## Other code mode plugins for Claude Code
+
+- [juhas96/claude-codemode](https://github.com/juhas96/claude-codemode) also routes nested calls through Claude Code's permission system.
+- [jliocsar/claude-codemode](https://github.com/jliocsar/claude-codemode) runs TypeScript in a Node VM and replaces Read, Write, Edit and Bash with its tool.
+- [ejklock/claude-code-mode](https://github.com/ejklock/claude-code-mode) bridges to pi's code mode in a Node child process.
+- [brianjmeier/claude-codemode](https://github.com/brianjmeier/claude-codemode) is a mod with a codemode skill and an agent-spawning helper.
+- [codelitt/codemode-x](https://github.com/codelitt/codemode-x) wraps APIs and databases into a typed SDK behind two MCP tools.
+- [ryx2/claude-codemode](https://github.com/ryx2/claude-codemode) adds code mode to the Claude Agent SDK in Python.
 
 ## Thanks
 
