@@ -37,7 +37,7 @@ const isOwnRepo = (path: string, home: string) => {
 
 const DESCRIPTION = `Run JavaScript that calls your other tools and return only what answers the question. Reach for it when one call's output decides the next (rg, then read around the hits; list, then fetch each), when you need a slice of a big output (a thread, logs, JSON, a long file), or to fan out over many files or repos. Each turn re-reads your whole context, and every output stays in it, so a chain of reads in one script costs one turn and only what it returns. For one call whose whole output you need, or a few independent calls, call the tools directly.
 - \`code\` is an async function body: top-level await and return work. The language is a JavaScript subset: no classes, imports, timers or fetch.
-- \`await tools.Bash({ command })\`, \`tools.Read({ file_path, offset, limit })\`, \`tools["mcp__server__tool"]({...})\` take the same arguments as the direct tools. Each resolves to \`{ text, isError, result }\`: \`text\` is what you would have read, \`result\` the tool's structured output. A failing call resolves with isError true; it does not throw.
+- \`await tools.Bash({ command })\`, \`tools.Read({ file_path, offset, limit })\`, \`tools["mcp__server__tool"]({...})\` take the same arguments as the direct tools. Each resolves to \`{ text, isError, result }\`: \`text\` is what you would have read, but whole where a direct call gets a saved-to-file notice, \`result\` the tool's structured output. A failing call resolves with isError true; it does not throw.
 - Read-only calls with literal arguments at the top level start before the program reaches them, so sequential \`await\`s of independent reads run in parallel. Use \`Promise.all\` for calls built at run time.
 - Top-level \`const\` and \`let\` values are kept for the session as JSON. A later run can use them by name, so fetch once and filter again without re-reading.
 - Filter before returning: slice lines, match a regex, count, pick fields. The return value and console.log lines are all that reaches your context, plus any images the nested calls returned, such as html_preview screenshots.
@@ -52,6 +52,9 @@ const HINT_STREAK = 3
 // Their output can't be sliced by a script that calls them.
 const NO_HINT = new Set([SELF, 'Agent', 'Task', 'TaskOutput', 'Skill', 'AskUserQuestion', 'ToolSearch'])
 type Loop = { inFlight: number; calls: number; streak: number; hinted: Set<'big' | 'chain'> }
+// The notice core answers with in place of an output too big for the model, which it saved to the file named here.
+const SPILL =
+  /^(?:<persisted-output>\nOutput too large \([^)]*\)\. Full output saved to: |Error: result \([\d,]+ characters\) exceeds maximum allowed tokens\. Output has been saved to )(\S+?)\.?\n/
 
 type Block = { readonly type: string }
 const isImage = (block: unknown): block is Block =>
@@ -123,7 +126,7 @@ export const register: Register = on => {
     if (r.deny !== undefined || NO_HINT.has(e.tool)) return r
     const hints: string[] = []
     const chars = r.text?.length ?? 0
-    const persisted = r.text?.includes('<persisted-output>') === true
+    const persisted = SPILL.test(r.text ?? '')
     if ((chars > HINT_CHARS || persisted) && !loop.hinted.has('big')) {
       loop.hinted.add('big')
       hints.push(
@@ -133,7 +136,7 @@ export const register: Register = on => {
     if (loop.streak === HINT_STREAK && !loop.hinted.has('chain')) {
       loop.hinted.add('chain')
       hints.push(
-        `cc-codemod: that was ${HINT_STREAK} single reads in ${HINT_STREAK} turns, and each turn re-read your whole context. When the next read depends on this output, write the steps as one mcp__cc-codemod__run script.`,
+        `cc-codemod: that was ${HINT_STREAK} single reads in ${HINT_STREAK} turns, and each turn re-read your whole context. Reads that don't depend on each other go in one turn as parallel calls. When the next read depends on this output, write the steps as one mcp__cc-codemod__run script.`,
       )
     }
     return hints.length > 0 ? { ...r, context: [...(r.context ?? []), ...hints] } : r
@@ -176,6 +179,14 @@ export const register: Register = on => {
       return { decision, isReadOnly }
     }
     const home = await $.env.get('HOME')
+    // Core cuts a nested call's big output to a notice as it does a direct one's. The script is there to slice that
+    // output, so it gets the whole file core saved.
+    const unspill = async (text: string) => {
+      const path = SPILL.exec(text)?.[1]
+      return home !== undefined && path?.startsWith(`${home}/`) && path.includes('/tool-results/')
+        ? $.fs.read(path).catch(() => text)
+        : text
+    }
     // Core judges a shell line whole. Where it won't vouch for one, each simple command in it still counts as a read
     // when core holds it read-only on its own, it's a listed read, or it's git in one of the person's own repos.
     const bashReadOnly = async (command: string) => {
@@ -234,7 +245,7 @@ export const register: Register = on => {
         }
         if (ran.isError === true) failed += 1
         if (Array.isArray(ran.result)) images.push(...ran.result.filter(isImage))
-        const text = ran.text ?? JSON.stringify(ran.result)
+        const text = await unspill(ran.text ?? JSON.stringify(ran.result))
         outputs.push(text)
         return { text, isError: ran.isError === true, result: plain(ran.result) }
       },

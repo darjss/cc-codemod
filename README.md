@@ -47,7 +47,7 @@ Answer `y` to add the marketplace and pick a scope. From a shell, `claude plugin
 - Images the nested calls returned, such as `html_preview` screenshots, as image blocks after the text, up to 20 per run. Inside the script, `result` shows each one as `{ type: "image", attached: true }`, so a saved value doesn't carry the base64.
 - A footer like `[4 tool calls · 1 failed · 3 started early · saved pkg, log]`. If the script returned a large nested output unchanged, the footer says so and asks the model to slice it next time.
 
-Each nested call resolves to `{ text, isError, result }`. `text` is what the direct call would have shown, and `result` is the tool's structured output. A failed or denied call resolves with `isError: true` and does not throw, and the footer counts it. A script that throws, a syntax error or an abort marks the whole run as an error.
+Each nested call resolves to `{ text, isError, result }`. `text` is what the direct call would have shown, and `result` is the tool's structured output. Where Claude Code would cut a big output to a notice naming the file it saved it to, `text` is that file's whole content instead, up to 4 MiB, so the script can slice it. A failed or denied call resolves with `isError: true` and does not throw, and the footer counts it. A script that throws, a syntax error or an abort marks the whole run as an error.
 
 A script that calls `html_render` is refused before it runs. T3 Code shows a rendered page only beside a direct call, so from a script the call succeeds and the page never shows.
 
@@ -126,7 +126,10 @@ What it sends, and where:
 - Top-level JSON values a script declares are kept in the session's `$.state`: up to 100 KB per value and 1 MB in all, gone when the session ends.
 - While a run is going, the status line shows its progress.
 
-What it reads from the machine: only `HOME`, through `$.env.get`. It uses it to expand `~` and `$HOME` in the Bash lines it checks for an early start, and to recognize repos under `~/dev` and `~/.t3/worktrees`. The value is never sent anywhere or shown to the model.
+What it reads from the machine:
+
+- `HOME`, through `$.env.get`. It uses it to expand `~` and `$HOME` in the Bash lines it checks for an early start, and to recognize repos under `~/dev` and `~/.t3/worktrees`. The value is never sent anywhere or shown to the model.
+- Files Claude Code saved for a nested call whose output was too big to show, through `$.fs.read`. It reads only the path core's own notice names, under `HOME` and in a `tool-results` folder, and hands the text to the script that made the call. Only what the script returns reaches the model.
 
 Reflective code: `register.ts` uses none. The bundled interpreter does. Effect, `@opencode/codemode` and acorn use getters, `Proxy` and `then` methods for their own APIs, such as Effect's pipeable and promise interop. The scripts the model writes run inside that interpreter, with no eval and no access to Node.
 

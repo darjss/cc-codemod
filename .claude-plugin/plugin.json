@@ -1,6 +1,6 @@
 {
   "name": "cc-codemod",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "types": "./types/index.d.ts",
   "description": "Code mode for Claude Code: one tool that runs a JavaScript script over Claude's own tools and returns only the answer",
   "author": {
