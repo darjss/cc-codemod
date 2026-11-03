@@ -3,6 +3,11 @@ import { callKey, execute, shellQuote, shellSegments, type Result, type Speculat
 
 const SELF = 'mcp__cc-codemod__run'
 const RETURN_NUDGE = 8_000
+// Images nested calls return reach the model with the run's result, up to this many.
+const MAX_IMAGES = 20
+// Tools whose effect is the host drawing the model's own tool call. T3 Code shows an html_render page only beside a
+// direct call, so the same call made from a script returns an attachment id and shows nothing.
+const DIRECT_ONLY = /__html_render$/
 const NOTEBOOK = { plugin: 'cc-codemod', key: 'notebook' } as const
 // Tools whose every call is a read, so one with a computed argument doesn't stop later calls from starting early.
 const READS = new Set(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch'])
@@ -35,17 +40,29 @@ const DESCRIPTION = `Run JavaScript that calls your other tools and return only 
 - \`await tools.Bash({ command })\`, \`tools.Read({ file_path, offset, limit })\`, \`tools["mcp__server__tool"]({...})\` take the same arguments as the direct tools. Each resolves to \`{ text, isError, result }\`: \`text\` is what you would have read, \`result\` the tool's structured output. A failing call resolves with isError true; it does not throw.
 - Read-only calls with literal arguments at the top level start before the program reaches them, so sequential \`await\`s of independent reads run in parallel. Use \`Promise.all\` for calls built at run time.
 - Top-level \`const\` and \`let\` values are kept for the session as JSON. A later run can use them by name, so fetch once and filter again without re-reading.
-- Filter before returning: slice lines, match a regex, count, pick fields. The return value and console.log lines are all that reaches your context.
-- \`search("query")\` finds a tool and its exact path.`
+- Filter before returning: slice lines, match a regex, count, pick fields. The return value and console.log lines are all that reaches your context, plus any images the nested calls returned, such as html_preview screenshots.
+- \`search("query")\` finds a tool and its exact path.
+- Call html_render directly. A page rendered from a script never shows.`
 
-const plain = (value: unknown) => (value === undefined ? null : JSON.parse(JSON.stringify(value)))
+type Block = { readonly type: string }
+const isImage = (block: unknown): block is Block =>
+  typeof block === 'object' && block !== null && 'type' in block && block.type === 'image'
+// The script sees where an image was, not its base64, so a saved value doesn't carry the bytes.
+const plain = (value: unknown) =>
+  value === undefined
+    ? null
+    : JSON.parse(
+        JSON.stringify(
+          Array.isArray(value) ? value.map(b => (isImage(b) ? { type: 'image', attached: true } : b)) : value,
+        ),
+      )
 
 // A return that carries a nested tool's output unchanged and large is the waste worth flagging.
 // A script that sliced or filtered what it read is left alone, however long its answer.
 const passedThrough = (returned: string, outputs: ReadonlyArray<string>) =>
   outputs.some(t => t.length > RETURN_NUDGE / 2 && returned.includes(t.slice(t.length / 2 - 250, t.length / 2 + 250)))
 
-const render = (r: Result, outputs: ReadonlyArray<string>) => {
+const render = (r: Result, outputs: ReadonlyArray<string>, failed: number, images: number) => {
   const out: string[] = []
   if (r.ok) out.push(typeof r.value === 'string' ? r.value : JSON.stringify(r.value, null, 1))
   else out.push(`${r.error.kind}: ${r.error.message}`)
@@ -55,6 +72,9 @@ const render = (r: Result, outputs: ReadonlyArray<string>) => {
   const text = out.join('\n')
   const footer = [
     `${r.toolCalls.length} tool calls`,
+    failed > 0 && `${failed} failed`,
+    images > 0 && `${Math.min(images, MAX_IMAGES)} images attached`,
+    images > MAX_IMAGES && `${images - MAX_IMAGES} images left out`,
     r.early > 0 && `${r.early} started early`,
     r.unused > 0 && `${r.unused} started early and unused`,
     r.saved.length > 0 && `saved ${r.saved.join(', ')}`,
@@ -95,8 +115,14 @@ export const register: Register = on => {
     const code = (e as { code?: unknown }).code
     if (typeof code !== 'string' || code.trim() === '') return { deny: 'cc-codemod: pass JavaScript source as `code`.' }
 
-    const tools = (await $.tool.list())
-      .filter(t => t.name !== SELF)
+    const listed = (await $.tool.list()).filter(t => t.name !== SELF)
+    const direct = listed.filter(t => DIRECT_ONLY.test(t.name) && code.includes(t.name.split('__').at(-1) ?? t.name))
+    if (direct.length > 0)
+      return {
+        deny: `cc-codemod: call ${direct.map(t => t.name).join(', ')} directly. The page shows only beside a direct call. Nothing ran.`,
+      }
+    const tools = listed
+      .filter(t => !DIRECT_ONLY.test(t.name))
       .map(t => ({ name: t.name, description: (t.description.split('\n')[0] ?? '').slice(0, 200) }))
 
     const check = async (tool: string, input: unknown) => {
@@ -145,7 +171,9 @@ export const register: Register = on => {
 
     let started = 0
     let done = 0
+    let failed = 0
     const outputs: string[] = []
+    const images: Block[] = []
     return execute(
       code,
       tools,
@@ -157,7 +185,12 @@ export const register: Register = on => {
         const ran = await $.tool.call({ ...args, tool: name } as ToolCallArgs)
         done += 1
         $.ui.status(`codemode ${done}/${started} · ${name}`)
-        if (ran.deny !== undefined) return { text: ran.deny, isError: true, result: null }
+        if (ran.deny !== undefined) {
+          failed += 1
+          return { text: ran.deny, isError: true, result: null }
+        }
+        if (ran.isError === true) failed += 1
+        if (Array.isArray(ran.result)) images.push(...ran.result.filter(isImage))
         const text = ran.text ?? JSON.stringify(ran.result)
         outputs.push(text)
         return { text, isError: ran.isError === true, result: plain(ran.result) }
@@ -166,11 +199,14 @@ export const register: Register = on => {
     )
       .then(
         async result => {
+          const text = render(result, outputs, failed, images.length)
+          // A deny is how a hook marks its answer an error, so a failed program reads as a failed call.
+          if (!result.ok) return { deny: text }
           if (result.notebook) await $.state.set(NOTEBOOK, result.notebook)
-          return { result: render(result, outputs) }
+          return { result: images.length > 0 ? [{ type: 'text', text }, ...images.slice(0, MAX_IMAGES)] : text }
         },
-        // An abort or an interpreter crash rejects. Report it as the tool's output instead of failing the call.
-        (error: unknown) => ({ result: `cc-codemod: ${error instanceof Error ? error.message : String(error)}` }),
+        // An abort or an interpreter crash rejects, and fails the call the same way.
+        (error: unknown) => ({ deny: `cc-codemod: ${error instanceof Error ? error.message : String(error)}` }),
       )
       .finally(() => $.ui.status(undefined))
   })
