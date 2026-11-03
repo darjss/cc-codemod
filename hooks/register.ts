@@ -35,14 +35,23 @@ const isOwnRepo = (path: string, home: string) => {
   return !full.startsWith('/') || [`${home}/dev/`, `${home}/.t3/worktrees/`].some(root => `${full}/`.startsWith(root))
 }
 
-const DESCRIPTION = `Run JavaScript that calls your other tools and return only what answers the question. Reach for it to fan out (three or more independent reads, searches or commands in one step, often across repos or many files) or when you need only a slice of a large output. For one or two calls, call the tool directly.
+const DESCRIPTION = `Run JavaScript that calls your other tools and return only what answers the question. Reach for it when one call's output decides the next (rg, then read around the hits; list, then fetch each), when you need a slice of a big output (a thread, logs, JSON, a long file), or to fan out over many files or repos. Each turn re-reads your whole context, and every output stays in it, so a chain of reads in one script costs one turn and only what it returns. For one call whose whole output you need, or a few independent calls, call the tools directly.
 - \`code\` is an async function body: top-level await and return work. The language is a JavaScript subset: no classes, imports, timers or fetch.
 - \`await tools.Bash({ command })\`, \`tools.Read({ file_path, offset, limit })\`, \`tools["mcp__server__tool"]({...})\` take the same arguments as the direct tools. Each resolves to \`{ text, isError, result }\`: \`text\` is what you would have read, \`result\` the tool's structured output. A failing call resolves with isError true; it does not throw.
 - Read-only calls with literal arguments at the top level start before the program reaches them, so sequential \`await\`s of independent reads run in parallel. Use \`Promise.all\` for calls built at run time.
 - Top-level \`const\` and \`let\` values are kept for the session as JSON. A later run can use them by name, so fetch once and filter again without re-reading.
 - Filter before returning: slice lines, match a regex, count, pick fields. The return value and console.log lines are all that reaches your context, plus any images the nested calls returned, such as html_preview screenshots.
 - \`search("query")\` finds a tool and its exact path.
-- Call html_render directly. A page rendered from a script never shows.`
+- Call html_render directly. A page rendered from a script never shows.
+- A chain: \`const hits = (await tools.Bash({ command: "rg -n -m2 'createUser' src" })).text.trim().split("\\n"); return Promise.all(hits.map(h => { const [f, n] = h.split(":"); return tools.Bash({ command: "sed -n " + Math.max(1, n - 5) + "," + (+n + 15) + "p " + f }).then(r => h + "\\n" + r.text) }))\`
+- A slice: \`const t = JSON.parse((await tools["mcp__t3-code__t3_thread_read"]({ threadId, limit: 30 })).text); return t.items.at(-1)?.text.slice(0, 3000)\``
+
+// After a direct call, a one-line hint where a script would have cost less, once per kind in each agent loop.
+const HINT_CHARS = 10_000
+const HINT_STREAK = 3
+// Their output can't be sliced by a script that calls them.
+const NO_HINT = new Set([SELF, 'Agent', 'Task', 'TaskOutput', 'Skill', 'AskUserQuestion', 'ToolSearch'])
+type Loop = { inFlight: number; calls: number; streak: number; hinted: Set<'big' | 'chain'> }
 
 type Block = { readonly type: string }
 const isImage = (block: unknown): block is Block =>
@@ -94,6 +103,40 @@ export const register: Register = on => {
     if (e.tool_use_id === undefined && next.origin.plugin === $.plugin.name)
       readOnly.set(callKey(e.tool, e.input), e.isReadOnly === true)
     return verdict
+  })
+
+  // A turn is the calls that overlap in one loop. Read-only calls of one turn run together, so a turn with a single
+  // read that follows two others like it is a chain a script would fold.
+  const loops = new Map<string, Loop>()
+  on('tool.call', async ($, e, next) => {
+    if (next.origin.plugin === $.plugin.name) return next(e)
+    const key = e.agentId ?? ''
+    const loop = loops.get(key) ?? { inFlight: 0, calls: 0, streak: 0, hinted: new Set() }
+    loops.set(key, loop)
+    if (loop.inFlight === 0) loop.calls = 0
+    loop.inFlight += 1
+    loop.calls += 1
+    const r = await next(e).finally(() => {
+      loop.inFlight -= 1
+    })
+    if (loop.inFlight === 0) loop.streak = loop.calls === 1 && r.isReadOnly === true ? loop.streak + 1 : 0
+    if (r.deny !== undefined || NO_HINT.has(e.tool)) return r
+    const hints: string[] = []
+    const chars = r.text?.length ?? 0
+    const persisted = r.text?.includes('<persisted-output>') === true
+    if ((chars > HINT_CHARS || persisted) && !loop.hinted.has('big')) {
+      loop.hinted.add('big')
+      hints.push(
+        `cc-codemod: that ${e.tool} output ${persisted ? 'was too big to show' : `was ${chars} characters`}, and what you read stays in your context for the rest of the session. When you need only part of an output this size, call the tool inside mcp__cc-codemod__run and return the slice.`,
+      )
+    }
+    if (loop.streak === HINT_STREAK && !loop.hinted.has('chain')) {
+      loop.hinted.add('chain')
+      hints.push(
+        `cc-codemod: that was ${HINT_STREAK} single reads in ${HINT_STREAK} turns, and each turn re-read your whole context. When the next read depends on this output, write the steps as one mcp__cc-codemod__run script.`,
+      )
+    }
+    return hints.length > 0 ? { ...r, context: [...(r.context ?? []), ...hints] } : r
   })
 
   on('session.start', async ($, e, next) => {

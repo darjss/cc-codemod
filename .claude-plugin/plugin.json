@@ -1,6 +1,6 @@
 {
   "name": "cc-codemod",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "types": "./types/index.d.ts",
   "description": "One tool that runs JavaScript calling Claude's other tools, on opencode's interpreter",
   "author": {
