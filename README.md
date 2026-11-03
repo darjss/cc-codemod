@@ -62,7 +62,9 @@ When a run succeeds, its top-level `const` and `let` values that are JSON go int
 
 ## When it helps
 
-The tool is optional. Claude picks it when a step needs three or more independent calls, or when it only wants a slice of a big output. I tried forcing every Bash and Read through it, and it made things worse.
+The tool is optional. I tried forcing every Bash and Read through it, and it made things worse. It pays off in two places, and the description names both. The first is a chain where one call's output decides the next, such as `rg` and then reading around the hits. Each step there is a turn that re-reads the whole context. The second is a big output when you need only a slice of it. That output otherwise stays in context for the rest of the session. Plain independent reads are already covered by Claude's own parallel calls.
+
+In two weeks of my sessions, codemode got 4% of tool calls. It missed 177 chained read turns and 152 outputs over 10K characters, 48 of them `t3_thread_read`. So the mod now adds a one-line hint after a direct call where a script would have cost less. The hint fires after an output over 10K characters or one Claude Code saved to a file, and on the third turn in a row that made a single read. Each kind fires once per agent loop, so a subagent gets its own. Calls made from a script, `Agent`, `Skill` and `ToolSearch` never get one.
 
 | Run                                           | Tokens       | Tool calls |
 | --------------------------------------------- | ------------ | ---------- |
