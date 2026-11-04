@@ -46,12 +46,16 @@ const DESCRIPTION = `Run JavaScript that calls your other tools and return only 
 - A chain: \`const hits = (await tools.Bash({ command: "rg -n -m2 'createUser' src" })).text.trim().split("\\n"); return Promise.all(hits.map(h => { const [f, n] = h.split(":"); return tools.Bash({ command: "sed -n " + Math.max(1, n - 5) + "," + (+n + 15) + "p " + f }).then(r => h + "\\n" + r.text) }))\`
 - A slice: \`const t = JSON.parse((await tools["mcp__t3-code__t3_thread_read"]({ threadId, limit: 30 })).text); return t.items.at(-1)?.text.slice(0, 3000)\``
 
-// After a direct call, a one-line hint where a script would have cost less, once per kind in each agent loop.
+// After a direct call, a one-line hint where a script would have cost less: the big-output one once in each agent loop,
+// the chain one on each new streak of single reads, up to CHAIN_HINTS times, since long loops keep chaining after one.
 const HINT_CHARS = 10_000
 const HINT_STREAK = 3
+const CHAIN_HINTS = 3
+// The chain seen most in Bash: rg, then sed -n around a hit, then again.
+const BASH_CHAIN = ' Its description has the recipe for rg and then sed -n around every hit, in one call.'
 // Their output can't be sliced by a script that calls them.
 const NO_HINT = new Set([SELF, 'Agent', 'Task', 'TaskOutput', 'Skill', 'AskUserQuestion', 'ToolSearch'])
-type Loop = { inFlight: number; calls: number; streak: number; hinted: Set<'big' | 'chain'> }
+type Loop = { inFlight: number; calls: number; streak: number; big: boolean; chains: number }
 // The notice core answers with in place of an output too big for the model, which it saved to the file named here.
 const SPILL =
   /^(?:<persisted-output>\nOutput too large \([^)]*\)\. Full output saved to: |Error: result \([\d,]+ characters\) exceeds maximum allowed tokens\. Output has been saved to )(\S+?)\.?\n/
@@ -114,7 +118,7 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     if (next.origin.plugin === $.plugin.name) return next(e)
     const key = e.agentId ?? ''
-    const loop = loops.get(key) ?? { inFlight: 0, calls: 0, streak: 0, hinted: new Set() }
+    const loop = loops.get(key) ?? { inFlight: 0, calls: 0, streak: 0, big: false, chains: 0 }
     loops.set(key, loop)
     if (loop.inFlight === 0) loop.calls = 0
     loop.inFlight += 1
@@ -127,16 +131,16 @@ export const register: Register = on => {
     const hints: string[] = []
     const chars = r.text?.length ?? 0
     const persisted = SPILL.test(r.text ?? '')
-    if ((chars > HINT_CHARS || persisted) && !loop.hinted.has('big')) {
-      loop.hinted.add('big')
+    if ((chars > HINT_CHARS || persisted) && !loop.big) {
+      loop.big = true
       hints.push(
         `cc-codemod: that ${e.tool} output ${persisted ? 'was too big to show' : `was ${chars} characters`}, and what you read stays in your context for the rest of the session. When you need only part of an output this size, call the tool inside mcp__cc-codemod__run and return the slice.`,
       )
     }
-    if (loop.streak === HINT_STREAK && !loop.hinted.has('chain')) {
-      loop.hinted.add('chain')
+    if (loop.streak === HINT_STREAK && loop.chains < CHAIN_HINTS) {
+      loop.chains += 1
       hints.push(
-        `cc-codemod: that was ${HINT_STREAK} single reads in ${HINT_STREAK} turns, and each turn re-read your whole context. Reads that don't depend on each other go in one turn as parallel calls. When the next read depends on this output, write the steps as one mcp__cc-codemod__run script.`,
+        `cc-codemod: that was ${HINT_STREAK} single reads in ${HINT_STREAK} turns, and each turn re-read your whole context. Reads that don't depend on each other go in one turn as parallel calls. When the next read depends on this output, write the steps as one mcp__cc-codemod__run script.${e.tool === 'Bash' ? BASH_CHAIN : ''}`,
       )
     }
     return hints.length > 0 ? { ...r, context: [...(r.context ?? []), ...hints] } : r
@@ -259,8 +263,17 @@ export const register: Register = on => {
           if (result.notebook) await $.state.set(NOTEBOOK, result.notebook)
           return { result: images.length > 0 ? [{ type: 'text', text }, ...images.slice(0, MAX_IMAGES)] : text }
         },
-        // An abort or an interpreter crash rejects, and fails the call the same way.
-        (error: unknown) => ({ deny: `cc-codemod: ${error instanceof Error ? error.message : String(error)}` }),
+        // An abort or an interpreter crash rejects, and fails the call the same way. An abort reads as Effect's fiber
+        // interruption, so it's named for what happened.
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          return {
+            deny:
+              next.signal.aborted || message.startsWith('All fibers interrupted')
+                ? `cc-codemod: run interrupted after ${done} of ${started} tool calls finished.`
+                : `cc-codemod: ${message}`,
+          }
+        },
       )
       .finally(() => $.ui.status(undefined))
   })
